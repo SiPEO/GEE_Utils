@@ -20,7 +20,7 @@ def exportImageCollectionToGCS(imgC, bucket=None, resolution=10, start=False):
           bucket=bucket,
           maxPixels=1e13
         )
-        export = exportImageToGCS(img=img, roi=roi, bucket=bucket, resolution=resolution, filename=filename, dest_path=filePath, start)
+        export = exportImageToGCS(img=img, roi=roi, bucket=bucket, resolution=resolution, filename=filename, dest_path=filePath, start=start)
         task_ids[filename] = export.id
 
     return(task_ids)
