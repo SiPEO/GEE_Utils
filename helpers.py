@@ -9,23 +9,17 @@ def exportImageCollectionToGCS(imgC, bucket=None, resolution=10, start=False):
 
         filename = str(img.get('FILENAME').getInfo())
         filePath = str(img.get('FILEPATH').getInfo())
-        roi = ee.Geometry(img.get("ROI")).coordinates().getInfo()
+        roi = ee.Geometry(img.get("ROI"))
 
-        export = ee.batch.Export.image.toCloudStorage(
-          image=img,
-          description=filename,
-          scale=resolution,
-          region=roi,
-          fileNamePrefix=filePath,
-          bucket=bucket,
-          maxPixels=1e13
-        )
         export = exportImageToGCS(img=img, roi=roi, bucket=bucket, resolution=resolution, filename=filename, dest_path=filePath, start=start)
         task_ids[filename] = export.id
 
     return(task_ids)
 
 def exportImageToGCS(img=None, roi=None, bucket=None, filename=None, dest_path=None, resolution=10, start=False):
+
+    roi = ee.Geometry(roi).coordinates().getInfo()
+
     export = ee.batch.Export.image.toCloudStorage(
       image=img,
       description=filename,
