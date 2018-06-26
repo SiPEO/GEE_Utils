@@ -6,7 +6,7 @@ from helpers import dilatedErossion
 # Author: Gennadii Donchyts
 # License: Apache 2.0
 # Modified by Lloyd Hughes to reduce spurious cloud shadow masks
-def sentinel2ProjectShadows(image, cloudHeights=ee.List.sequence(200,10000,250), cloudThresh=0.2, irSumThresh=0.3, ndviThresh=-0.1):
+def sentinel2ProjectShadows(image, cloudHeights=ee.List(range(200, 10000, 250)), cloudThresh=0.2, irSumThresh=0.3, ndviThresh=-0.1):
   meanAzimuth = image.get('MEAN_SOLAR_AZIMUTH_ANGLE')
   meanZenith = image.get('MEAN_SOLAR_ZENITH_ANGLE')
 
