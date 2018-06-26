@@ -49,26 +49,26 @@ class GEETaskManager(object):
 		try:
 			g_task.start()
 		except:
-			raise TaskFailedException, "Task [{}] failed to start on GEE platform".format(task_def['id'])
+			raise TaskFailedException("Task [{}] failed to start on GEE platform".format(task_def['id']))
 		finally:
 			print("Processing {}".format(task_def['id']))
 
 		if task_def['id'] in self.task_log:
 			if 'done' in self.task_log[task_def['id']] and self.task_log[task_def['id']]['done']:
-				raise DuplicateTaskException, "Task [{}] has already completed".format(task_def['id'])
+				raise DuplicateTaskException("Task [{}] has already completed".format(task_def['id']))
 
-			self.task_log[task_def['id']]['retry'] += 1 
-			self.task_log[task_def['id']]['task_ids'] += [g_task.id] 
+			self.task_log[task_def['id']]['retry'] += 1
+			self.task_log[task_def['id']]['task_ids'] += [g_task.id]
 		else:
 			self.task_log[task_def['id']] = {'retry': 0, 'task_def': task_def, 'task_ids': [g_task.id]}
 
-	  	waiting = 0
-	  	while g_task.status()['state'] in ['UNSUBMITTED', 'READY']:
-	  		gevent.sleep(20) # Sleep for 20 seconds before checking the task again
-	  		waiting += 20
+		waiting = 0
+		while g_task.status()['state'] in ['UNSUBMITTED', 'READY']:
+			gevent.sleep(20) # Sleep for 20 seconds before checking the task again
+			waiting += 20
 
-	  		if waiting > 60:
-	  			raise TimeoutException, "Task [{}] failed to start on GEE platform".format(task_def['id'])
+			if waiting > 60:
+				raise TimeoutException("Task [{}] failed to start on GEE platform".format(task_def['id']))
 
 		while g_task.status()['state'] in ['RUNNING']:
 			gevent.sleep(1*60) # Only check the status of a task every 1 minutes at most
@@ -77,7 +77,7 @@ class GEETaskManager(object):
 			if 'error_message' in g_task.status():
 				self.task_log[task_def['id']]['error'] = g_task.status()['error_message']
 
-			raise TaskFailedException, "Task [{}] failed to complete successfully".format(task_def['id'])
+			raise TaskFailedException("Task [{}] failed to complete successfully".format(task_def['id']))
 		else:
 			self.task_log[task_def['id']]['done'] = True
 
@@ -117,7 +117,7 @@ class GEETaskManager(object):
 			f_raw = open(self.log_file, 'wb')
 			with FileObjectThread(f_raw, 'wb') as handle:
 				dill.dump(self.task_log, handle)
-			
+
 			gevent.sleep(60)
 
 		self.monitor_running = False
@@ -179,8 +179,6 @@ class GEETaskManager(object):
 			self.wait_till_done()
 
 	def wait_till_done(self):
-		self._validate()	
+		self._validate()
 		gevent.joinall(self.monitor_greenlet + self.greenlets)
 		self.n_running_workers = 0
-
-
