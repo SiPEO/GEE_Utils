@@ -1,6 +1,7 @@
 import gevent
 import ee
 import dill
+import os
 from gevent import monkey
 monkey.patch_all()
 
@@ -36,6 +37,13 @@ class GEETaskManager(object):
 		self.n_running_workers = 0
 		self.task_log = {}
 		self.log_file = log_file
+
+		self._load_log_file()
+
+	def _load_log_file(self):
+		if os.path.exists(self.log_file):
+    		# Reload the old state
+			self.task_log = dill.load( open(self.log_file, 'rb') )
 
 	def _validate(self):
 		if self.greenlets is None:
@@ -126,12 +134,16 @@ class GEETaskManager(object):
 	def add_task(self, task_def, blocking=False):
 		assert isinstance(task_def, dict)
 
+		if 'done' in self.task_log[task_def['id']] or self.task_log[task_def['id']]['retry'] >= self.max_retry:
+			print("Task {} was not queued as it has already completed.".format(task_def['id']))
+			return
+
 		if blocking:
 			self.task_queue.put(task_def)
 		else:
 			self.task_queue.put_nowait(task_def)
 
-		print("Received Task {}".format(task_def['id']))
+		print("Queued Task {}".format(task_def['id']))
 
 		if self.wake_on_task:
 			self._start_on_task()
