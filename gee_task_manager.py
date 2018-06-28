@@ -134,7 +134,8 @@ class GEETaskManager(object):
 	def add_task(self, task_def, blocking=False):
 		assert isinstance(task_def, dict)
 
-		if 'done' in self.task_log[task_def['id']] or self.task_log[task_def['id']]['retry'] >= self.max_retry:
+		if  task_def['id'] in self.task_log and \
+			('done' in self.task_log[task_def['id']] or self.task_log[task_def['id']]['retry'] >= self.max_retry):
 			print("Task {} was not queued as it has already completed.".format(task_def['id']))
 			return
 
