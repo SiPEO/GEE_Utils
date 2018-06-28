@@ -8,6 +8,8 @@ monkey.patch_all()
 from gevent.fileobject import FileObjectThread
 from gevent.queue import Queue, Empty
 
+dill.settings['recurse'] = True
+
 class TimeoutException(Exception):
 	pass
 
@@ -43,7 +45,9 @@ class GEETaskManager(object):
 	def _load_log_file(self):
 		if os.path.exists(self.log_file):
     		# Reload the old state
-			self.task_log = dill.load( open(self.log_file, 'rb') )
+			f = open(self.log_file, 'rb')
+			f.seek(0)
+			self.task_log = dill.loads( f.read() )
 
 	def _validate(self):
 		if self.greenlets is None:
@@ -110,7 +114,7 @@ class GEETaskManager(object):
 			try:
 				self.worker(args)
 			except (TimeoutException, TaskFailedException) as e:
-				if self.task_log[args['id']]['retry'] < self.max_retry - 1:
+				if args['id'] in self.task_log and self.task_log[args['id']]['retry'] < self.max_retry - 1:
 					self.add_task(args, blocking=True) # Requeue the task for trying again later
 				else:
 					print("Task [{}] has failed to complete".format(args['id']))
