@@ -92,6 +92,7 @@ class GEETaskManager(object):
 				raise TimeoutException("Task [{}] failed to start on GEE platform".format(task_def['id']))
 
 		while g_task.status()['state'] in ['RUNNING']:
+			print("Task [{}] still processing...".format(task_def['id']))
 			gevent.sleep(60) # Only check the status of a task every 1 minutes at most
 
 			if self.current_time_s() - self.task_log[task_def['id']]['start_time'] >= self.task_timeout:
