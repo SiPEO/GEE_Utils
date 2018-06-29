@@ -52,6 +52,7 @@ class GEETaskManager(object):
 			f = open(self.log_file, 'rb')
 			f.seek(0)
 			self.task_log = dill.loads( f.read() )
+			f.close()
 
 	def _validate(self):
 		if self.greenlets is None:
@@ -137,6 +138,8 @@ class GEETaskManager(object):
 			f_raw = open(self.log_file, 'wb')
 			with FileObjectThread(f_raw, 'wb') as handle:
 				dill.dump(self.task_log, handle)
+				
+			f_raw.close()
 
 			gevent.sleep(60)
 
