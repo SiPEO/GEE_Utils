@@ -2,6 +2,7 @@ import gevent
 import ee
 import dill
 import os
+import time
 from gevent import monkey
 monkey.patch_all()
 
@@ -9,6 +10,8 @@ from gevent.fileobject import FileObjectThread
 from gevent.queue import Queue, Empty
 
 dill.settings['recurse'] = True
+
+current_time_s = lambda: int(time.time())
 
 class TimeoutException(Exception):
 	pass
@@ -24,7 +27,7 @@ class DuplicateTaskException(Exception):
 
 class GEETaskManager(object):
 
-	def __init__(self, n_workers=5, work_forever=False, max_retry=1, wake_on_task=False, log_file='save_state.pkl'):
+	def __init__(self, n_workers=5, work_forever=False, max_retry=1, wake_on_task=False, process_timeout=14400, log_file='save_state.pkl'):
 		self.task_queue = Queue(maxsize=50)
 		self.max_retry = max_retry
 		self.worker = self._default_worker
@@ -39,6 +42,7 @@ class GEETaskManager(object):
 		self.n_running_workers = 0
 		self.task_log = {}
 		self.log_file = log_file
+		self.task_timeout = process_timeout
 
 		self._load_log_file()
 
@@ -64,6 +68,7 @@ class GEETaskManager(object):
 			raise TaskFailedException("Task [{}] failed to start on GEE platform".format(task_def['id']))
 		finally:
 			print("Processing {}".format(task_def['id']))
+			self.task_log[task_def['id']]['start_time'] = current_time_s()
 
 		if task_def['id'] in self.task_log:
 			if 'done' in self.task_log[task_def['id']] and self.task_log[task_def['id']]['done']:
@@ -83,7 +88,10 @@ class GEETaskManager(object):
 				raise TimeoutException("Task [{}] failed to start on GEE platform".format(task_def['id']))
 
 		while g_task.status()['state'] in ['RUNNING']:
-			gevent.sleep(1*60) # Only check the status of a task every 1 minutes at most
+			gevent.sleep(60) # Only check the status of a task every 1 minutes at most
+
+			if current_time_s() - self.task_log[task_def['id']]['start_time'] >= self.task_timeout:
+				raise TimeoutException("Task [{}] has timed out, processing took too long".format(task_def['id']))
 
 		if not g_task.status()['state'] in ['COMPLETED']:
 			if 'error_message' in g_task.status():
