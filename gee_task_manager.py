@@ -3,6 +3,7 @@ import ee
 import dill
 import os
 import time
+import traceback
 from gevent import monkey
 monkey.patch_all()
 
@@ -10,8 +11,6 @@ from gevent.fileobject import FileObjectThread
 from gevent.queue import Queue, Empty
 
 dill.settings['recurse'] = True
-
-current_time_s = lambda: int(time.time())
 
 class TimeoutException(Exception):
 	pass
@@ -58,6 +57,9 @@ class GEETaskManager(object):
 		if self.greenlets is None:
 			raise Exception("No workers have been registered!")
 
+	def current_time_s(self):
+		return int(time.time())
+
 	def _default_worker(self, task_def):
 		g_task = task_def['action'](**task_def['kwargs'])
 
@@ -69,7 +71,6 @@ class GEETaskManager(object):
 			raise TaskFailedException("Task [{}] failed to start on GEE platform".format(task_def['id']))
 		finally:
 			print("Processing {}".format(task_def['id']))
-			self.task_log[task_def['id']]['start_time'] = current_time_s()
 
 		if task_def['id'] in self.task_log:
 			if 'done' in self.task_log[task_def['id']] and self.task_log[task_def['id']]['done']:
@@ -79,6 +80,8 @@ class GEETaskManager(object):
 			self.task_log[task_def['id']]['task_ids'] += [g_task.id]
 		else:
 			self.task_log[task_def['id']] = {'retry': 0, 'task_def': task_def, 'task_ids': [g_task.id]}
+
+		self.task_log[task_def['id']]['start_time'] = self.current_time_s()
 
 		waiting = 0
 		while g_task.status()['state'] in ['UNSUBMITTED', 'READY']:
@@ -91,7 +94,7 @@ class GEETaskManager(object):
 		while g_task.status()['state'] in ['RUNNING']:
 			gevent.sleep(60) # Only check the status of a task every 1 minutes at most
 
-			if current_time_s() - self.task_log[task_def['id']]['start_time'] >= self.task_timeout:
+			if self.current_time_s() - self.task_log[task_def['id']]['start_time'] >= self.task_timeout:
 				raise TimeoutException("Task [{}] has timed out, processing took too long".format(task_def['id']))
 
 		if not g_task.status()['state'] in ['COMPLETED']:
@@ -127,8 +130,11 @@ class GEETaskManager(object):
 					self.add_task(args, blocking=True) # Requeue the task for trying again later
 				else:
 					print("Task [{}] has failed to complete".format(args['id']))
+			except (DuplicateTaskException) as e:
+				print("Task [{}] is a duplicate of an already completed task".format(args['id']))
 			except Exception as e:
-				print(e)
+				print("Another exception occured")
+				traceback.print_exc()
 
 	def _monitor(self):
 		self.monitor_running = True
@@ -138,7 +144,7 @@ class GEETaskManager(object):
 			f_raw = open(self.log_file, 'wb')
 			with FileObjectThread(f_raw, 'wb') as handle:
 				dill.dump(self.task_log, handle)
-				
+
 			f_raw.close()
 
 			gevent.sleep(60)
