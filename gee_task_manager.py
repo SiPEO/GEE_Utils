@@ -1,11 +1,16 @@
 import gevent
 import ee
 import dill
+import os
+import time
+import traceback
 from gevent import monkey
 monkey.patch_all()
 
 from gevent.fileobject import FileObjectThread
 from gevent.queue import Queue, Empty
+
+dill.settings['recurse'] = True
 
 class TimeoutException(Exception):
 	pass
@@ -21,7 +26,7 @@ class DuplicateTaskException(Exception):
 
 class GEETaskManager(object):
 
-	def __init__(self, n_workers=5, work_forever=False, max_retry=1, wake_on_task=False, log_file='save_state.pkl'):
+	def __init__(self, n_workers=5, work_forever=False, max_retry=1, wake_on_task=False, process_timeout=14400, log_file='save_state.pkl'):
 		self.task_queue = Queue(maxsize=50)
 		self.max_retry = max_retry
 		self.worker = self._default_worker
@@ -36,10 +41,24 @@ class GEETaskManager(object):
 		self.n_running_workers = 0
 		self.task_log = {}
 		self.log_file = log_file
+		self.task_timeout = process_timeout
+
+		self._load_log_file()
+
+	def _load_log_file(self):
+		if os.path.exists(self.log_file):
+    		# Reload the old state
+			f = open(self.log_file, 'rb')
+			f.seek(0)
+			self.task_log = dill.loads( f.read() )
+			f.close()
 
 	def _validate(self):
 		if self.greenlets is None:
 			raise Exception("No workers have been registered!")
+
+	def current_time_s(self):
+		return int(time.time())
 
 	def _default_worker(self, task_def):
 		g_task = task_def['action'](**task_def['kwargs'])
@@ -49,35 +68,41 @@ class GEETaskManager(object):
 		try:
 			g_task.start()
 		except:
-			raise TaskFailedException, "Task [{}] failed to start on GEE platform".format(task_def['id'])
+			raise TaskFailedException("Task [{}] failed to start on GEE platform".format(task_def['id']))
 		finally:
 			print("Processing {}".format(task_def['id']))
 
 		if task_def['id'] in self.task_log:
 			if 'done' in self.task_log[task_def['id']] and self.task_log[task_def['id']]['done']:
-				raise DuplicateTaskException, "Task [{}] has already completed".format(task_def['id'])
+				raise DuplicateTaskException("Task [{}] has already completed".format(task_def['id']))
 
-			self.task_log[task_def['id']]['retry'] += 1 
-			self.task_log[task_def['id']]['task_ids'] += [g_task.id] 
+			self.task_log[task_def['id']]['retry'] += 1
+			self.task_log[task_def['id']]['task_ids'] += [g_task.id]
 		else:
 			self.task_log[task_def['id']] = {'retry': 0, 'task_def': task_def, 'task_ids': [g_task.id]}
 
-	  	waiting = 0
-	  	while g_task.status()['state'] in ['UNSUBMITTED', 'READY']:
-	  		gevent.sleep(20) # Sleep for 20 seconds before checking the task again
-	  		waiting += 20
+		self.task_log[task_def['id']]['start_time'] = self.current_time_s()
 
-	  		if waiting > 60:
-	  			raise TimeoutException, "Task [{}] failed to start on GEE platform".format(task_def['id'])
+		waiting = 0
+		while g_task.status()['state'] in ['UNSUBMITTED', 'READY']:
+			gevent.sleep(20) # Sleep for 20 seconds before checking the task again
+			waiting += 20
+
+			if waiting > 60:
+				raise TimeoutException("Task [{}] failed to start on GEE platform".format(task_def['id']))
 
 		while g_task.status()['state'] in ['RUNNING']:
-			gevent.sleep(1*60) # Only check the status of a task every 1 minutes at most
+			print("Task [{}] still processing...".format(task_def['id']))
+			gevent.sleep(60) # Only check the status of a task every 1 minutes at most
+
+			if self.current_time_s() - self.task_log[task_def['id']]['start_time'] >= self.task_timeout:
+				raise TimeoutException("Task [{}] has timed out, processing took too long".format(task_def['id']))
 
 		if not g_task.status()['state'] in ['COMPLETED']:
 			if 'error_message' in g_task.status():
 				self.task_log[task_def['id']]['error'] = g_task.status()['error_message']
 
-			raise TaskFailedException, "Task [{}] failed to complete successfully".format(task_def['id'])
+			raise TaskFailedException("Task [{}] failed to complete successfully".format(task_def['id']))
 		else:
 			self.task_log[task_def['id']]['done'] = True
 
@@ -102,12 +127,15 @@ class GEETaskManager(object):
 			try:
 				self.worker(args)
 			except (TimeoutException, TaskFailedException) as e:
-				if self.task_log[args['id']]['retry'] < self.max_retry - 1:
+				if args['id'] in self.task_log and self.task_log[args['id']]['retry'] < self.max_retry - 1:
 					self.add_task(args, blocking=True) # Requeue the task for trying again later
 				else:
 					print("Task [{}] has failed to complete".format(args['id']))
+			except (DuplicateTaskException) as e:
+				print("Task [{}] is a duplicate of an already completed task".format(args['id']))
 			except Exception as e:
-				print(e)
+				print("Another exception occured")
+				traceback.print_exc()
 
 	def _monitor(self):
 		self.monitor_running = True
@@ -117,7 +145,9 @@ class GEETaskManager(object):
 			f_raw = open(self.log_file, 'wb')
 			with FileObjectThread(f_raw, 'wb') as handle:
 				dill.dump(self.task_log, handle)
-			
+
+			f_raw.close()
+
 			gevent.sleep(60)
 
 		self.monitor_running = False
@@ -126,12 +156,17 @@ class GEETaskManager(object):
 	def add_task(self, task_def, blocking=False):
 		assert isinstance(task_def, dict)
 
+		if  task_def['id'] in self.task_log and \
+			('done' in self.task_log[task_def['id']] or self.task_log[task_def['id']]['retry'] >= self.max_retry):
+			print("Task {} was not queued as it has already completed.".format(task_def['id']))
+			return
+
 		if blocking:
 			self.task_queue.put(task_def)
 		else:
 			self.task_queue.put_nowait(task_def)
 
-		print("Received Task {}".format(task_def['id']))
+		print("Queued Task {}".format(task_def['id']))
 
 		if self.wake_on_task:
 			self._start_greenlets()
@@ -177,8 +212,6 @@ class GEETaskManager(object):
 			self.wait_till_done()
 
 	def wait_till_done(self):
-		self._validate()	
+		self._validate()
 		gevent.joinall(self.monitor_greenlet + self.greenlets)
 		self.n_running_workers = 0
-
-
