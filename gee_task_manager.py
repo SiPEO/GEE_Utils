@@ -187,7 +187,7 @@ class GEETaskManager(object):
 
 			for i in range(min(n_tasks, len(empty_slots))):
 				if self.greenlets is None:
-					self.greenlets = []
+					self.greenlets = [None for i in range(self.n_workers)]
 
 				worker_idx = empty_slots[i]
 				self.greenlets[worker_idx] = gevent.spawn(self._worker, worker_idx)
