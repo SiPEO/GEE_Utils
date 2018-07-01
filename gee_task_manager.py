@@ -142,7 +142,7 @@ class GEETaskManager(object):
 	def monitor(self):
 		self.monitor_running = True
 		while self.n_running_workers > 0:
-			self._monitor(copy.copy(self.task_log))
+			self._monitor(copy.deepcopy(self.task_log))
 			gevent.sleep(60)
 
 		self.monitor_running = False
@@ -211,7 +211,7 @@ class GEETaskManager(object):
 		return self.task_log
 
 	def set_task_log(self, task_log):
-		self.task_log = copy.copy(task_log)
+		self.task_log = copy.deepcopy(task_log)
 
 	def start(self, blocking=True):
 		self._start_greenlets()
