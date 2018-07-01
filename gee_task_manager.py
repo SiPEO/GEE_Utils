@@ -82,7 +82,7 @@ class GEETaskManager(object):
 			self.task_log[task_def['id']]['done'] = True
 
 	def _worker(self, worker_no):
-		self.greenlet_states[worker_no-1] = True
+		self.greenlet_states[worker_no] = True
 
 		while True:
 			try:
@@ -96,7 +96,7 @@ class GEETaskManager(object):
 				else:
 					print("Worker {} has no more work... Returning".format(worker_no))
 					self.n_running_workers -= 1
-					self.greenlet_states[worker_no-1] = False
+					self.greenlet_states[worker_no] = False
 					return
 
 			try:
@@ -134,26 +134,27 @@ class GEETaskManager(object):
 		print("Received Task {}".format(task_def['id']))
 
 		if self.wake_on_task:
-			self._start_on_task()
+			self._start_greenlets()
 
 	def _queue_full(self):
 		max_task_queue = getattr(self, "max_task_queue", 50)
 		return self.task_queue.qsize() >= max_task_queue
 
-	def _start_on_task(self):
-		if self.greenlets is None:
-			self.start(blocking=False)
-
-		if self.n_running_workers < self.n_workers and self.task_queue.qsize() >= 0:
+	def _start_greenlets(self):
+		if self.n_running_workers < self.n_workers:
+			n_tasks = self.task_queue.qsize()
 			empty_slots = [i for i, g in enumerate(self.greenlet_states) if g is False]
 
-			for i in empty_slots:
+			for i in range(min(n_tasks, len(empty_slots))):
+				if self.greenlets is None:
+					self.greenlets = []
+
+				worker_idx = empty_slots[i]
+				self.greenlets[worker_idx] = gevent.spawn(self._worker, worker_idx)
 				self.n_running_workers += 1
-				self.greenlets[i] = gevent.spawn(self._worker, i+1)
 
-		if self.monitor_running is False:
+		if self.monitor_greenlet is None or self.monitor_running is False:
 			self.monitor_greenlet = [gevent.spawn(self._monitor)]
-
 
 	def wait_for_queue(self):
 		queue_sleep_time = getattr(self, "queue_sleep_time", 30)
@@ -170,10 +171,7 @@ class GEETaskManager(object):
 		return self.task_log
 
 	def start(self, blocking=True):
-		self.n_running_workers = self.n_workers
-
-		self.monitor_greenlet = [gevent.spawn(self._monitor)]
-		self.greenlets = [gevent.spawn(self._worker, i) for i in range(1, self.n_workers + 1)]
+		self._start_greenlets()
 
 		if blocking:
 			self.wait_till_done()
