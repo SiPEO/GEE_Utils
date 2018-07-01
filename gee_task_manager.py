@@ -4,6 +4,8 @@ import dill
 import os
 import time
 import traceback
+import json
+import copy
 from gevent import monkey
 monkey.patch_all()
 
@@ -30,7 +32,7 @@ class GEETaskManager(object):
 		self.task_queue = Queue(maxsize=50)
 		self.max_retry = max_retry
 		self.worker = self._default_worker
-		self.monitor = self._monitor
+		self._monitor = self._default_monitor
 		self.monitor_running = False
 		self.monitor_greenlet = None
 		self.greenlets = None
@@ -137,21 +139,24 @@ class GEETaskManager(object):
 				print("Another exception occured")
 				traceback.print_exc()
 
-	def _monitor(self):
+	def monitor(self):
 		self.monitor_running = True
-
 		while self.n_running_workers > 0:
-			# Save the state to ensure we can recover in case of a crash
-			f_raw = open(self.log_file, 'wb')
-			with FileObjectThread(f_raw, 'wb') as handle:
-				dill.dump(self.task_log, handle)
-
-			f_raw.close()
-
+			self._monitor(copy.copy(self.task_log))
 			gevent.sleep(60)
 
 		self.monitor_running = False
 		print("Monitor has quit as there are no more workers")
+
+	def _default_monitor(self, task_log):
+		# Save the state to ensure we can recover in case of a crash
+		f_raw = open(self.log_file, 'w')
+		with FileObjectThread(f_raw, 'w') as handle:
+			dill.dump(self.task_log, handle)
+
+		f_raw.close()
+
+		gevent.sleep(60)
 
 	def add_task(self, task_def, blocking=False):
 		assert isinstance(task_def, dict)
@@ -189,7 +194,7 @@ class GEETaskManager(object):
 				self.n_running_workers += 1
 
 		if self.monitor_greenlet is None or self.monitor_running is False:
-			self.monitor_greenlet = [gevent.spawn(self._monitor)]
+			self.monitor_greenlet = [gevent.spawn(self.monitor)]
 
 	def wait_for_queue(self):
 		queue_sleep_time = getattr(self, "queue_sleep_time", 30)
@@ -204,6 +209,9 @@ class GEETaskManager(object):
 
 	def get_task_log(self):
 		return self.task_log
+
+	def set_task_log(self, task_log):
+		self.task_log = copy.copy(task_log)
 
 	def start(self, blocking=True):
 		self._start_greenlets()
