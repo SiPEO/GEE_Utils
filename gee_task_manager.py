@@ -29,7 +29,9 @@ class DuplicateTaskException(Exception):
 class GEETaskManager(object):
 
 	def __init__(self, n_workers=5, work_forever=False, max_retry=1, wake_on_task=False, process_timeout=14400, log_file='save_state.pkl'):
-		self.task_queue = Queue(maxsize=50)
+		self.max_queue_size = 25
+		self.task_queue = Queue(maxsize=self.max_queue_size)
+		self.retry_queue = Queue(maxsize=n_workers*max_retry)
 		self.max_retry = max_retry
 		self.worker = self._default_worker
 		self._monitor = self._default_monitor
@@ -115,24 +117,27 @@ class GEETaskManager(object):
 
 		while True:
 			try:
-				args = self.task_queue.get_nowait()
+				args = self.retry_queue.get_nowait()
 			except Empty:
-				if self.work_forever:
-					sleep_time = getattr(self, "worker_sleep_time", 5)
-					print("Worker {} will sleep {}s".format(worker_no, sleep_time))
-					gevent.sleep(sleep_time)
-					continue
-				else:
-					print("Worker {} has no more work... Returning".format(worker_no))
-					self.n_running_workers -= 1
-					self.greenlet_states[worker_no] = False
-					return
+				try:
+					args = self.task_queue.get_nowait()
+				except Empty:
+					if self.work_forever:
+						sleep_time = getattr(self, "worker_sleep_time", 5)
+						print("Worker {} will sleep {}s".format(worker_no, sleep_time))
+						gevent.sleep(sleep_time)
+						continue
+					else:
+						print("Worker {} has no more work... Returning".format(worker_no))
+						self.n_running_workers -= 1
+						self.greenlet_states[worker_no] = False
+						return
 
 			try:
 				self.worker(args)
 			except (TimeoutException, TaskFailedException) as e:
 				if args['id'] in self.task_log and self.task_log[args['id']]['retry'] < self.max_retry - 1:
-					self.add_task(args, blocking=True) # Requeue the task for trying again later
+					self._retry_task(args) # We cannot wait for this task to be queued as it blocks everything then if the queue is full
 				else:
 					print("Task [{}] has failed to complete".format(args['id']))
 			except (DuplicateTaskException) as e:
@@ -160,27 +165,44 @@ class GEETaskManager(object):
 
 		gevent.sleep(60)
 
-	def add_task(self, task_def, blocking=False):
+	def _task_can_run(self, task_def):
 		assert isinstance(task_def, dict)
 
 		if  task_def['id'] in self.task_log and \
 			('done' in self.task_log[task_def['id']] or self.task_log[task_def['id']]['retry'] >= self.max_retry - 1):
-			print("Task {} was not queued as it has already completed.".format(task_def['id']))
-			return
+			return False
 
-		if blocking:
-			self.task_queue.put(task_def)
+		return True
+
+	def _retry_task(self, task_def):
+
+		if self._task_can_run(task_def):
+			self.retry_queue.put_nowait(task_def)
+			print("Retrying Task {}".format(task_def['id']))
 		else:
-			self.task_queue.put_nowait(task_def)
+			print("Task {} was not queued as it has already completed or has been retried too often.".format(task_def['id']))
 
-		print("Queued Task {}".format(task_def['id']))
+		if self.wake_on_task:
+			self._start_greenlets()
+
+	def add_task(self, task_def, blocking=False):
+
+		if self._task_can_run(task_def):
+			if blocking:
+				self.task_queue.put(task_def)
+			else:
+				self.task_queue.put_nowait(task_def)
+
+			print("Queued Task {}".format(task_def['id']))
+		else:
+			print("Task {} was not queued as it has already completed or has been retried too often.".format(task_def['id']))
 
 		if self.wake_on_task:
 			self._start_greenlets()
 
 	def _queue_full(self):
-		max_task_queue = getattr(self, "max_task_queue", 50)
-		return self.task_queue.qsize() >= max_task_queue
+        # We always need at least n_workers worth of open slots in the queue in case of retries
+		return self.task_queue.qsize() >= self.max_queue_size
 
 	def _start_greenlets(self):
 		if self.n_running_workers < self.n_workers:
