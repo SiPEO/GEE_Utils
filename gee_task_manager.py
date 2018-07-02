@@ -99,10 +99,12 @@ class GEETaskManager(object):
 				raise TimeoutException("Task [{}] has timed out, processing took too long".format(task_def['id']))
 
 		if not g_task.status()['state'] in ['COMPLETED']:
+			err = ''
 			if 'error_message' in g_task.status():
 				self.task_log[task_def['id']]['error'] = g_task.status()['error_message']
+				err = self.task_log[task_def['id']]['error']
 
-			raise TaskFailedException("Task [{}] failed to complete successfully".format(task_def['id']))
+			raise TaskFailedException("Task [{}] failed to complete successfully - {}".format(task_def['id'], err))
 		else:
 			self.task_log[task_def['id']]['done'] = True
 
