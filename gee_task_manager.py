@@ -4,6 +4,8 @@ import dill
 import os
 import time
 import traceback
+import json
+import copy
 from gevent import monkey
 monkey.patch_all()
 
@@ -30,7 +32,7 @@ class GEETaskManager(object):
 		self.task_queue = Queue(maxsize=50)
 		self.max_retry = max_retry
 		self.worker = self._default_worker
-		self.monitor = self._monitor
+		self._monitor = self._default_monitor
 		self.monitor_running = False
 		self.monitor_greenlet = None
 		self.greenlets = None
@@ -109,7 +111,7 @@ class GEETaskManager(object):
 			self.task_log[task_def['id']]['done'] = True
 
 	def _worker(self, worker_no):
-		self.greenlet_states[worker_no-1] = True
+		self.greenlet_states[worker_no] = True
 
 		while True:
 			try:
@@ -123,7 +125,7 @@ class GEETaskManager(object):
 				else:
 					print("Worker {} has no more work... Returning".format(worker_no))
 					self.n_running_workers -= 1
-					self.greenlet_states[worker_no-1] = False
+					self.greenlet_states[worker_no] = False
 					return
 
 			try:
@@ -139,27 +141,30 @@ class GEETaskManager(object):
 				print("Another exception occured")
 				traceback.print_exc()
 
-	def _monitor(self):
+	def monitor(self):
 		self.monitor_running = True
-
 		while self.n_running_workers > 0:
-			# Save the state to ensure we can recover in case of a crash
-			f_raw = open(self.log_file, 'wb')
-			with FileObjectThread(f_raw, 'wb') as handle:
-				dill.dump(self.task_log, handle)
-
-			f_raw.close()
-
+			self._monitor(copy.deepcopy(self.task_log))
 			gevent.sleep(60)
 
 		self.monitor_running = False
 		print("Monitor has quit as there are no more workers")
 
+	def _default_monitor(self, task_log):
+		# Save the state to ensure we can recover in case of a crash
+		f_raw = open(self.log_file, 'w')
+		with FileObjectThread(f_raw, 'w') as handle:
+			dill.dump(self.task_log, handle)
+
+		f_raw.close()
+
+		gevent.sleep(60)
+
 	def add_task(self, task_def, blocking=False):
 		assert isinstance(task_def, dict)
 
 		if  task_def['id'] in self.task_log and \
-			('done' in self.task_log[task_def['id']] or self.task_log[task_def['id']]['retry'] >= self.max_retry):
+			('done' in self.task_log[task_def['id']] or self.task_log[task_def['id']]['retry'] >= self.max_retry - 1):
 			print("Task {} was not queued as it has already completed.".format(task_def['id']))
 			return
 
@@ -171,26 +176,27 @@ class GEETaskManager(object):
 		print("Queued Task {}".format(task_def['id']))
 
 		if self.wake_on_task:
-			self._start_on_task()
+			self._start_greenlets()
 
 	def _queue_full(self):
 		max_task_queue = getattr(self, "max_task_queue", 50)
 		return self.task_queue.qsize() >= max_task_queue
 
-	def _start_on_task(self):
-		if self.greenlets is None:
-			self.start(blocking=False)
-
-		if self.n_running_workers < self.n_workers and self.task_queue.qsize() >= 0:
+	def _start_greenlets(self):
+		if self.n_running_workers < self.n_workers:
+			n_tasks = self.task_queue.qsize()
 			empty_slots = [i for i, g in enumerate(self.greenlet_states) if g is False]
 
-			for i in empty_slots:
+			for i in range(min(n_tasks, len(empty_slots))):
+				if self.greenlets is None:
+					self.greenlets = [None for i in range(self.n_workers)]
+
+				worker_idx = empty_slots[i]
+				self.greenlets[worker_idx] = gevent.spawn(self._worker, worker_idx)
 				self.n_running_workers += 1
-				self.greenlets[i] = gevent.spawn(self._worker, i+1)
 
-		if self.monitor_running is False:
-			self.monitor_greenlet = [gevent.spawn(self._monitor)]
-
+		if self.monitor_greenlet is None or self.monitor_running is False:
+			self.monitor_greenlet = [gevent.spawn(self.monitor)]
 
 	def wait_for_queue(self):
 		queue_sleep_time = getattr(self, "queue_sleep_time", 30)
@@ -206,11 +212,11 @@ class GEETaskManager(object):
 	def get_task_log(self):
 		return self.task_log
 
-	def start(self, blocking=True):
-		self.n_running_workers = self.n_workers
+	def set_task_log(self, task_log):
+		self.task_log = copy.deepcopy(task_log)
 
-		self.monitor_greenlet = [gevent.spawn(self._monitor)]
-		self.greenlets = [gevent.spawn(self._worker, i) for i in range(1, self.n_workers + 1)]
+	def start(self, blocking=True):
+		self._start_greenlets()
 
 		if blocking:
 			self.wait_till_done()
