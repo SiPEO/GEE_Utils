@@ -1,6 +1,6 @@
 import ee
 
-from helpers import rescale, dilatedErossion
+from .helpers import rescale, dilatedErossion
 
 def sentinel2CloudScore(img):
     toa = img.select(['B1','B2','B3','B4','B5','B6','B7','B8','B8A', 'B9','B10', 'B11','B12']) \
@@ -34,11 +34,18 @@ def sentinel2CloudScore(img):
     score = score.max(ee.Image(0.001))
 
     # Remove small regions and clip the upper bound
-    dilated = dilatedErossion(score).min(ee.Image(1.0))
+    ## commenting this out--pointless to do this unless we do the
+    ## following line (42), which is also commented out in the JS
+    ## dilated = dilatedErossion(score).min(ee.Image(1.0))
+
+    ## This was commented out in the javascript--why?
+    ## score = score.multiply(dilated)
 
     score = score.reduceNeighborhood(
         reducer=ee.Reducer.mean(),
         kernel=ee.Kernel.square(5)
       )
+    
+    print("Generated cloud score")
 
     return img.addBands(score.rename('cloudScore'))
