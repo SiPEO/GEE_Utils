@@ -2,12 +2,15 @@ import gevent
 import ee
 import dill
 import os
+import sys
 import time
 import traceback
 import json
 import copy
-from gevent import monkey
-monkey.patch_all()
+
+# will need when using outside of 
+# from gevent import monkey
+# monkey.patch_all()
 
 from gevent.fileobject import FileObjectThread
 from gevent.queue import Queue, Empty
